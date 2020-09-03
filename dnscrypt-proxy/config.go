@@ -27,12 +27,14 @@ const (
 )
 
 type Config struct {
-	LogLevel                 int      `toml:"log_level"`
-	LogFile                  *string  `toml:"log_file"`
-	UseSyslog                bool     `toml:"use_syslog"`
-	ServerNames              []string `toml:"server_names"`
-	DisabledServerNames      []string `toml:"disabled_server_names"`
-	ListenAddresses          []string `toml:"listen_addresses"`
+	LogLevel                 int            `toml:"log_level"`
+	LogFile                  *string        `toml:"log_file"`
+	LogFileLatest            bool           `toml:"log_file_latest"`
+	UseSyslog                bool           `toml:"use_syslog"`
+	ServerNames              []string       `toml:"server_names"`
+	DisabledServerNames      []string       `toml:"disabled_server_names"`
+	ListenAddresses          []string       `toml:"listen_addresses"`
+	LocalDoH                 LocalDoHConfig `toml:"local_doh"`
 	Daemonize                bool
 	UserName                 string `toml:"user_name"`
 	ForceTCP                 bool   `toml:"force_tcp"`
@@ -45,54 +47,67 @@ type Config struct {
 	LBStrategy               string `toml:"lb_strategy"`
 	LBEstimator              bool   `toml:"lb_estimator"`
 	BlockIPv6                bool   `toml:"block_ipv6"`
+	BlockUnqualified         bool   `toml:"block_unqualified"`
+	BlockUndelegated         bool   `toml:"block_undelegated"`
 	Cache                    bool
-	CacheSize                int                        `toml:"cache_size"`
-	CacheNegTTL              uint32                     `toml:"cache_neg_ttl"`
-	CacheNegMinTTL           uint32                     `toml:"cache_neg_min_ttl"`
-	CacheNegMaxTTL           uint32                     `toml:"cache_neg_max_ttl"`
-	CacheMinTTL              uint32                     `toml:"cache_min_ttl"`
-	CacheMaxTTL              uint32                     `toml:"cache_max_ttl"`
-	RejectTTL                uint32                     `toml:"reject_ttl"`
-	CloakTTL                 uint32                     `toml:"cloak_ttl"`
-	QueryLog                 QueryLogConfig             `toml:"query_log"`
-	NxLog                    NxLogConfig                `toml:"nx_log"`
-	BlockName                BlockNameConfig            `toml:"blacklist"`
-	WhitelistName            WhitelistNameConfig        `toml:"whitelist"`
-	BlockIP                  BlockIPConfig              `toml:"ip_blacklist"`
-	ForwardFile              string                     `toml:"forwarding_rules"`
-	CloakFile                string                     `toml:"cloaking_rules"`
-	StaticsConfig            map[string]StaticConfig    `toml:"static"`
-	SourcesConfig            map[string]SourceConfig    `toml:"sources"`
-	SourceRequireDNSSEC      bool                       `toml:"require_dnssec"`
-	SourceRequireNoLog       bool                       `toml:"require_nolog"`
-	SourceRequireNoFilter    bool                       `toml:"require_nofilter"`
-	SourceDNSCrypt           bool                       `toml:"dnscrypt_servers"`
-	SourceDoH                bool                       `toml:"doh_servers"`
-	SourceIPv4               bool                       `toml:"ipv4_servers"`
-	SourceIPv6               bool                       `toml:"ipv6_servers"`
-	MaxClients               uint32                     `toml:"max_clients"`
-	FallbackResolver         string                     `toml:"fallback_resolver"`
-	IgnoreSystemDNS          bool                       `toml:"ignore_system_dns"`
-	AllWeeklyRanges          map[string]WeeklyRangesStr `toml:"schedules"`
-	LogMaxSize               int                        `toml:"log_files_max_size"`
-	LogMaxAge                int                        `toml:"log_files_max_age"`
-	LogMaxBackups            int                        `toml:"log_files_max_backups"`
-	TLSDisableSessionTickets bool                       `toml:"tls_disable_session_tickets"`
-	TLSCipherSuite           []uint16                   `toml:"tls_cipher_suite"`
-	NetprobeAddress          string                     `toml:"netprobe_address"`
-	NetprobeTimeout          int                        `toml:"netprobe_timeout"`
-	OfflineMode              bool                       `toml:"offline_mode"`
-	HTTPProxyURL             string                     `toml:"http_proxy"`
-	RefusedCodeInResponses   bool                       `toml:"refused_code_in_responses"`
-	BlockedQueryResponse     string                     `toml:"blocked_query_response"`
-	QueryMeta                []string                   `toml:"query_meta"`
-	AnonymizedDNS            AnonymizedDNSConfig        `toml:"anonymized_dns"`
+	CacheSize                int                         `toml:"cache_size"`
+	CacheNegTTL              uint32                      `toml:"cache_neg_ttl"`
+	CacheNegMinTTL           uint32                      `toml:"cache_neg_min_ttl"`
+	CacheNegMaxTTL           uint32                      `toml:"cache_neg_max_ttl"`
+	CacheMinTTL              uint32                      `toml:"cache_min_ttl"`
+	CacheMaxTTL              uint32                      `toml:"cache_max_ttl"`
+	RejectTTL                uint32                      `toml:"reject_ttl"`
+	CloakTTL                 uint32                      `toml:"cloak_ttl"`
+	QueryLog                 QueryLogConfig              `toml:"query_log"`
+	NxLog                    NxLogConfig                 `toml:"nx_log"`
+	BlockName                BlockNameConfig             `toml:"blocked_names"`
+	BlockNameLegacy          BlockNameConfigLegacy       `toml:"blacklist"`
+	WhitelistNameLegacy      WhitelistNameConfigLegacy   `toml:"whitelist"`
+	AllowedName              AllowedNameConfig           `toml:"allowed_names"`
+	BlockIP                  BlockIPConfig               `toml:"blocked_ips"`
+	BlockIPLegacy            BlockIPConfigLegacy         `toml:"ip_blacklist"`
+	ForwardFile              string                      `toml:"forwarding_rules"`
+	CloakFile                string                      `toml:"cloaking_rules"`
+	CaptivePortalFile        string                      `toml:"captive_portal_handler"`
+	StaticsConfig            map[string]StaticConfig     `toml:"static"`
+	SourcesConfig            map[string]SourceConfig     `toml:"sources"`
+	BrokenImplementations    BrokenImplementationsConfig `toml:"broken_implementations"`
+	SourceRequireDNSSEC      bool                        `toml:"require_dnssec"`
+	SourceRequireNoLog       bool                        `toml:"require_nolog"`
+	SourceRequireNoFilter    bool                        `toml:"require_nofilter"`
+	SourceDNSCrypt           bool                        `toml:"dnscrypt_servers"`
+	SourceDoH                bool                        `toml:"doh_servers"`
+	SourceIPv4               bool                        `toml:"ipv4_servers"`
+	SourceIPv6               bool                        `toml:"ipv6_servers"`
+	MaxClients               uint32                      `toml:"max_clients"`
+	FallbackResolver         string                      `toml:"fallback_resolver"`
+	FallbackResolvers        []string                    `toml:"fallback_resolvers"`
+	IgnoreSystemDNS          bool                        `toml:"ignore_system_dns"`
+	AllWeeklyRanges          map[string]WeeklyRangesStr  `toml:"schedules"`
+	LogMaxSize               int                         `toml:"log_files_max_size"`
+	LogMaxAge                int                         `toml:"log_files_max_age"`
+	LogMaxBackups            int                         `toml:"log_files_max_backups"`
+	TLSDisableSessionTickets bool                        `toml:"tls_disable_session_tickets"`
+	TLSCipherSuite           []uint16                    `toml:"tls_cipher_suite"`
+	NetprobeAddress          string                      `toml:"netprobe_address"`
+	NetprobeTimeout          int                         `toml:"netprobe_timeout"`
+	OfflineMode              bool                        `toml:"offline_mode"`
+	HTTPProxyURL             string                      `toml:"http_proxy"`
+	RefusedCodeInResponses   bool                        `toml:"refused_code_in_responses"`
+	BlockedQueryResponse     string                      `toml:"blocked_query_response"`
+	QueryMeta                []string                    `toml:"query_meta"`
+	AnonymizedDNS            AnonymizedDNSConfig         `toml:"anonymized_dns"`
+	DoHClientX509Auth        DoHClientX509AuthConfig     `toml:"doh_client_x509_auth"`
+	DoHClientX509AuthLegacy  DoHClientX509AuthConfig     `toml:"tls_client_auth"`
+	DNS64                    DNS64Config                 `toml:"dns64"`
 }
 
 func newConfig() Config {
 	return Config{
 		LogLevel:                 int(dlog.LogLevel()),
+		LogFileLatest:            true,
 		ListenAddresses:          []string{"127.0.0.1:53"},
+		LocalDoH:                 LocalDoHConfig{Path: "/dns-query"},
 		Timeout:                  5000,
 		KeepAlive:                5,
 		CertRefreshDelay:         240,
@@ -114,7 +129,7 @@ func newConfig() Config {
 		SourceDNSCrypt:           true,
 		SourceDoH:                true,
 		MaxClients:               250,
-		FallbackResolver:         DefaultFallbackResolver,
+		FallbackResolvers:        []string{DefaultFallbackResolver},
 		IgnoreSystemDNS:          false,
 		LogMaxSize:               10,
 		LogMaxAge:                7,
@@ -126,6 +141,12 @@ func newConfig() Config {
 		RefusedCodeInResponses:   false,
 		LBEstimator:              true,
 		BlockedQueryResponse:     "hinfo",
+		BrokenImplementations: BrokenImplementationsConfig{
+			FragmentsBlocked: []string{
+				"cisco", "cisco-ipv6", "cisco-familyshield", "cisco-familyshield-ipv6",
+				"cleanbrowsing-adult", "cleanbrowsing-family-ipv6", "cleanbrowsing-family", "cleanbrowsing-security",
+			},
+		},
 	}
 }
 
@@ -155,18 +176,36 @@ type NxLogConfig struct {
 }
 
 type BlockNameConfig struct {
+	File    string `toml:"blocked_names_file"`
+	LogFile string `toml:"log_file"`
+	Format  string `toml:"log_format"`
+}
+
+type BlockNameConfigLegacy struct {
 	File    string `toml:"blacklist_file"`
 	LogFile string `toml:"log_file"`
 	Format  string `toml:"log_format"`
 }
 
-type WhitelistNameConfig struct {
+type WhitelistNameConfigLegacy struct {
 	File    string `toml:"whitelist_file"`
 	LogFile string `toml:"log_file"`
 	Format  string `toml:"log_format"`
 }
 
+type AllowedNameConfig struct {
+	File    string `toml:"allowed_names_file"`
+	LogFile string `toml:"log_file"`
+	Format  string `toml:"log_format"`
+}
+
 type BlockIPConfig struct {
+	File    string `toml:"blocked_ips_file"`
+	LogFile string `toml:"log_file"`
+	Format  string `toml:"log_format"`
+}
+
+type BlockIPConfigLegacy struct {
 	File    string `toml:"blacklist_file"`
 	LogFile string `toml:"log_file"`
 	Format  string `toml:"log_format"`
@@ -178,7 +217,21 @@ type AnonymizedDNSRouteConfig struct {
 }
 
 type AnonymizedDNSConfig struct {
-	Routes []AnonymizedDNSRouteConfig `toml:"routes"`
+	Routes             []AnonymizedDNSRouteConfig `toml:"routes"`
+	SkipIncompatible   bool                       `toml:"skip_incompatible"`
+	DirectCertFallback bool                       `toml:"direct_cert_fallback"`
+}
+
+type BrokenImplementationsConfig struct {
+	BrokenQueryPadding []string `toml:"broken_query_padding"`
+	FragmentsBlocked   []string `toml:"fragments_blocked"`
+}
+
+type LocalDoHConfig struct {
+	ListenAddresses []string `toml:"listen_addresses"`
+	Path            string   `toml:"path"`
+	CertFile        string   `toml:"cert_file"`
+	CertKeyFile     string   `toml:"cert_key_file"`
 }
 
 type ServerSummary struct {
@@ -194,10 +247,26 @@ type ServerSummary struct {
 	Stamp       string   `json:"stamp"`
 }
 
+type TLSClientAuthCredsConfig struct {
+	ServerName string `toml:"server_name"`
+	ClientCert string `toml:"client_cert"`
+	ClientKey  string `toml:"client_key"`
+	RootCA     string `toml:"root_ca"`
+}
+
+type DoHClientX509AuthConfig struct {
+	Creds []TLSClientAuthCredsConfig `toml:"creds"`
+}
+
+type DNS64Config struct {
+	Prefixes  []string `toml:"prefix"`
+	Resolvers []string `toml:"resolver"`
+}
+
 type ConfigFlags struct {
 	List                    *bool
 	ListAll                 *bool
-	JsonOutput              *bool
+	JSONOutput              *bool
 	Check                   *bool
 	ConfigFile              *string
 	Child                   *bool
@@ -225,24 +294,23 @@ func findConfigFile(configFile *string) (string, error) {
 func ConfigLoad(proxy *Proxy, flags *ConfigFlags) error {
 	foundConfigFile, err := findConfigFile(flags.ConfigFile)
 	if err != nil {
-		dlog.Fatalf("Unable to load the configuration file [%s] -- Maybe use the -config command-line switch?", *flags.ConfigFile)
+		return fmt.Errorf("Unable to load the configuration file [%s] -- Maybe use the -config command-line switch?", *flags.ConfigFile)
 	}
 	config := newConfig()
 	md, err := toml.DecodeFile(foundConfigFile, &config)
 	if err != nil {
 		return err
 	}
-	undecoded := md.Undecoded()
-	if len(undecoded) > 0 {
-		return fmt.Errorf("Unsupported key in configuration file: [%s]", undecoded[0])
+	if err := cdFileDir(foundConfigFile); err != nil {
+		return err
 	}
-	cdFileDir(foundConfigFile)
 	if config.LogLevel >= 0 && config.LogLevel < int(dlog.SeverityLast) {
 		dlog.SetLogLevel(dlog.Severity(config.LogLevel))
 	}
 	if dlog.LogLevel() <= dlog.SeverityDebug && os.Getenv("DEBUG") == "" {
 		dlog.SetLogLevel(dlog.SeverityInfo)
 	}
+	dlog.TruncateLogFile(config.LogFileLatest)
 	if config.UseSyslog {
 		dlog.UseSyslog(true)
 	} else if config.LogFile != nil {
@@ -254,6 +322,14 @@ func ConfigLoad(proxy *Proxy, flags *ConfigFlags) error {
 			dlog.SetFileDescriptor(os.NewFile(uintptr(3), "logFile"))
 		}
 	}
+	if !*flags.Child {
+		dlog.Noticef("dnscrypt-proxy %s", AppVersion)
+	}
+	undecoded := md.Undecoded()
+	if len(undecoded) > 0 {
+		return fmt.Errorf("Unsupported key in configuration file: [%s]", undecoded[0])
+	}
+
 	proxy.logMaxSize = config.LogMaxSize
 	proxy.logMaxAge = config.LogMaxAge
 	proxy.logMaxBackups = config.LogMaxBackups
@@ -266,19 +342,24 @@ func ConfigLoad(proxy *Proxy, flags *ConfigFlags) error {
 	proxy.xTransport.tlsCipherSuite = config.TLSCipherSuite
 	proxy.xTransport.mainProto = proxy.mainProto
 	if len(config.FallbackResolver) > 0 {
-		if err := isIPAndPort(config.FallbackResolver); err != nil {
-			dlog.Fatalf("fallback_resolver [%v]", err)
+		config.FallbackResolvers = []string{config.FallbackResolver}
+	}
+	if len(config.FallbackResolvers) > 0 {
+		for _, resolver := range config.FallbackResolvers {
+			if err := isIPAndPort(resolver); err != nil {
+				return fmt.Errorf("Fallback resolver [%v]: %v", resolver, err)
+			}
 		}
 		proxy.xTransport.ignoreSystemDNS = config.IgnoreSystemDNS
 	}
-	proxy.xTransport.fallbackResolver = config.FallbackResolver
+	proxy.xTransport.fallbackResolvers = config.FallbackResolvers
 	proxy.xTransport.useIPv4 = config.SourceIPv4
 	proxy.xTransport.useIPv6 = config.SourceIPv6
 	proxy.xTransport.keepAlive = time.Duration(config.KeepAlive) * time.Second
 	if len(config.HTTPProxyURL) > 0 {
 		httpProxyURL, err := url.Parse(config.HTTPProxyURL)
 		if err != nil {
-			dlog.Fatalf("Unable to parse the HTTP proxy URL [%v]", config.HTTPProxyURL)
+			return fmt.Errorf("Unable to parse the HTTP proxy URL [%v]", config.HTTPProxyURL)
 		}
 		proxy.xTransport.httpProxyFunction = http.ProxyURL(httpProxyURL)
 	}
@@ -286,11 +367,11 @@ func ConfigLoad(proxy *Proxy, flags *ConfigFlags) error {
 	if len(config.Proxy) > 0 {
 		proxyDialerURL, err := url.Parse(config.Proxy)
 		if err != nil {
-			dlog.Fatalf("Unable to parse the proxy URL [%v]", config.Proxy)
+			return fmt.Errorf("Unable to parse the proxy URL [%v]", config.Proxy)
 		}
 		proxyDialer, err := netproxy.FromURL(proxyDialerURL, netproxy.Direct)
 		if err != nil {
-			dlog.Fatalf("Unable to use the proxy: [%v]", err)
+			return fmt.Errorf("Unable to use the proxy: [%v]", err)
 		}
 		proxy.xTransport.proxyDialer = &proxyDialer
 		proxy.mainProto = "tcp"
@@ -317,32 +398,49 @@ func ConfigLoad(proxy *Proxy, flags *ConfigFlags) error {
 	proxy.certRefreshDelayAfterFailure = time.Duration(10 * time.Second)
 	proxy.certIgnoreTimestamp = config.CertIgnoreTimestamp
 	proxy.ephemeralKeys = config.EphemeralKeys
-	if len(config.ListenAddresses) == 0 {
+	if len(config.ListenAddresses) == 0 && len(config.LocalDoH.ListenAddresses) == 0 {
 		dlog.Debug("No local IP/port configured")
 	}
-
-	lbStrategy := DefaultLBStrategy
-	switch strings.ToLower(config.LBStrategy) {
+	lbStrategy := LBStrategy(DefaultLBStrategy)
+	switch lbStrategyStr := strings.ToLower(config.LBStrategy); lbStrategyStr {
 	case "":
 		// default
 	case "p2":
-		lbStrategy = LBStrategyP2
+		lbStrategy = LBStrategyP2{}
 	case "ph":
-		lbStrategy = LBStrategyPH
+		lbStrategy = LBStrategyPH{}
 	case "fastest":
 	case "first":
-		lbStrategy = LBStrategyFirst
+		lbStrategy = LBStrategyFirst{}
 	case "random":
-		lbStrategy = LBStrategyRandom
+		lbStrategy = LBStrategyRandom{}
 	default:
-		dlog.Warnf("Unknown load balancing strategy: [%s]", config.LBStrategy)
+		if strings.HasPrefix(lbStrategyStr, "p") {
+			n, err := strconv.ParseInt(strings.TrimPrefix(lbStrategyStr, "p"), 10, 32)
+			if err != nil || n <= 0 {
+				dlog.Warnf("Invalid load balancing strategy: [%s]", config.LBStrategy)
+			} else {
+				lbStrategy = LBStrategyPN{n: int(n)}
+			}
+		} else {
+			dlog.Warnf("Unknown load balancing strategy: [%s]", config.LBStrategy)
+		}
 	}
 	proxy.serversInfo.lbStrategy = lbStrategy
 	proxy.serversInfo.lbEstimator = config.LBEstimator
 
 	proxy.listenAddresses = config.ListenAddresses
+	proxy.localDoHListenAddresses = config.LocalDoH.ListenAddresses
+	if len(config.LocalDoH.Path) > 0 && config.LocalDoH.Path[0] != '/' {
+		return fmt.Errorf("local DoH: [%s] cannot be a valid URL path. Read the documentation", config.LocalDoH.Path)
+	}
+	proxy.localDoHPath = config.LocalDoH.Path
+	proxy.localDoHCertFile = config.LocalDoH.CertFile
+	proxy.localDoHCertKeyFile = config.LocalDoH.CertKeyFile
 	proxy.daemonize = config.Daemonize
 	proxy.pluginBlockIPv6 = config.BlockIPv6
+	proxy.pluginBlockUnqualified = config.BlockUnqualified
+	proxy.pluginBlockUndelegated = config.BlockUndelegated
 	proxy.cache = config.Cache
 	proxy.cacheSize = config.CacheSize
 
@@ -384,6 +482,15 @@ func ConfigLoad(proxy *Proxy, flags *ConfigFlags) error {
 	proxy.nxLogFile = config.NxLog.File
 	proxy.nxLogFormat = config.NxLog.Format
 
+	if len(config.BlockName.File) > 0 && len(config.BlockNameLegacy.File) > 0 {
+		return errors.New("Don't specify both [blocked_names] and [blacklist] sections - Update your config file.")
+	}
+	if len(config.BlockNameLegacy.File) > 0 {
+		dlog.Notice("Use of [blacklist] is deprecated - Update your config file.")
+		config.BlockName.File = config.BlockNameLegacy.File
+		config.BlockName.Format = config.BlockNameLegacy.Format
+		config.BlockName.LogFile = config.BlockNameLegacy.LogFile
+	}
 	if len(config.BlockName.Format) == 0 {
 		config.BlockName.Format = "tsv"
 	} else {
@@ -396,18 +503,36 @@ func ConfigLoad(proxy *Proxy, flags *ConfigFlags) error {
 	proxy.blockNameFormat = config.BlockName.Format
 	proxy.blockNameLogFile = config.BlockName.LogFile
 
-	if len(config.WhitelistName.Format) == 0 {
-		config.WhitelistName.Format = "tsv"
+	if len(config.AllowedName.File) > 0 && len(config.WhitelistNameLegacy.File) > 0 {
+		return errors.New("Don't specify both [whitelist] and [allowed_names] sections - Update your config file.")
+	}
+	if len(config.WhitelistNameLegacy.File) > 0 {
+		dlog.Notice("Use of [whitelist] is deprecated - Update your config file.")
+		config.AllowedName.File = config.WhitelistNameLegacy.File
+		config.AllowedName.Format = config.WhitelistNameLegacy.Format
+		config.AllowedName.LogFile = config.WhitelistNameLegacy.LogFile
+	}
+	if len(config.AllowedName.Format) == 0 {
+		config.AllowedName.Format = "tsv"
 	} else {
-		config.WhitelistName.Format = strings.ToLower(config.WhitelistName.Format)
+		config.AllowedName.Format = strings.ToLower(config.AllowedName.Format)
 	}
-	if config.WhitelistName.Format != "tsv" && config.WhitelistName.Format != "ltsv" {
-		return errors.New("Unsupported whitelist log format")
+	if config.AllowedName.Format != "tsv" && config.AllowedName.Format != "ltsv" {
+		return errors.New("Unsupported allowed_names log format")
 	}
-	proxy.whitelistNameFile = config.WhitelistName.File
-	proxy.whitelistNameFormat = config.WhitelistName.Format
-	proxy.whitelistNameLogFile = config.WhitelistName.LogFile
+	proxy.whitelistNameFile = config.AllowedName.File
+	proxy.whitelistNameFormat = config.AllowedName.Format
+	proxy.whitelistNameLogFile = config.AllowedName.LogFile
 
+	if len(config.BlockIP.File) > 0 && len(config.BlockIPLegacy.File) > 0 {
+		return errors.New("Don't specify both [blocked_ips] and [ip_blacklist] sections - Update your config file.")
+	}
+	if len(config.BlockIPLegacy.File) > 0 {
+		dlog.Notice("Use of [ip_blacklist] is deprecated - Update your config file.")
+		config.BlockIP.File = config.BlockIPLegacy.File
+		config.BlockIP.Format = config.BlockIPLegacy.Format
+		config.BlockIP.LogFile = config.BlockIPLegacy.LogFile
+	}
 	if len(config.BlockIP.Format) == 0 {
 		config.BlockIP.Format = "tsv"
 	} else {
@@ -422,6 +547,7 @@ func ConfigLoad(proxy *Proxy, flags *ConfigFlags) error {
 
 	proxy.forwardFile = config.ForwardFile
 	proxy.cloakFile = config.CloakFile
+	proxy.captivePortalFile = config.CaptivePortalFile
 
 	allWeeklyRanges, err := ParseAllWeeklyRanges(config.AllWeeklyRanges)
 	if err != nil {
@@ -436,6 +562,31 @@ func ConfigLoad(proxy *Proxy, flags *ConfigFlags) error {
 		}
 		proxy.routes = &routes
 	}
+	proxy.skipAnonIncompatbibleResolvers = config.AnonymizedDNS.SkipIncompatible
+	proxy.anonDirectCertFallback = config.AnonymizedDNS.DirectCertFallback
+
+	if config.DoHClientX509AuthLegacy.Creds != nil {
+		return errors.New("[tls_client_auth] has been renamed to [doh_client_x509_auth] - Update your config file.")
+	}
+	configClientCreds := config.DoHClientX509Auth.Creds
+	creds := make(map[string]DOHClientCreds)
+	for _, configClientCred := range configClientCreds {
+		credFiles := DOHClientCreds{
+			clientCert: configClientCred.ClientCert,
+			clientKey:  configClientCred.ClientKey,
+			rootCA:     configClientCred.RootCA,
+		}
+		creds[configClientCred.ServerName] = credFiles
+	}
+	proxy.dohCreds = &creds
+
+	// Backwards compatibility
+	config.BrokenImplementations.FragmentsBlocked = append(config.BrokenImplementations.FragmentsBlocked, config.BrokenImplementations.BrokenQueryPadding...)
+
+	proxy.serversBlockingFragments = config.BrokenImplementations.FragmentsBlocked
+
+	proxy.dns64Prefixes = config.DNS64.Prefixes
+	proxy.dns64Resolvers = config.DNS64.Resolvers
 
 	if *flags.ListAll {
 		config.ServerNames = nil
@@ -458,16 +609,28 @@ func ConfigLoad(proxy *Proxy, flags *ConfigFlags) error {
 	netprobeAddress := DefaultNetprobeAddress
 	if len(config.NetprobeAddress) > 0 {
 		netprobeAddress = config.NetprobeAddress
-	} else if len(config.FallbackResolver) > 0 {
-		netprobeAddress = config.FallbackResolver
+	} else if len(config.FallbackResolvers) > 0 {
+		netprobeAddress = config.FallbackResolvers[0]
 	}
 	proxy.showCerts = *flags.ShowCerts || len(os.Getenv("SHOW_CERTS")) > 0
-	if proxy.showCerts {
-		proxy.listenAddresses = nil
+	if !*flags.Check && !*flags.ShowCerts && !*flags.List && !*flags.ListAll {
+		if err := NetProbe(proxy, netprobeAddress, netprobeTimeout); err != nil {
+			return err
+		}
+		for _, listenAddrStr := range proxy.listenAddresses {
+			proxy.addDNSListener(listenAddrStr)
+		}
+		for _, listenAddrStr := range proxy.localDoHListenAddresses {
+			proxy.addLocalDoHListener(listenAddrStr)
+		}
+		if err := proxy.addSystemDListeners(); err != nil {
+			return err
+		}
 	}
-	dlog.Noticef("dnscrypt-proxy %s", AppVersion)
-	if err := NetProbe(netprobeAddress, netprobeTimeout); err != nil {
-		return err
+	// if 'userName' is set and we are the parent process drop privilege and exit
+	if len(proxy.userName) > 0 && !proxy.child {
+		proxy.dropPrivilege(proxy.userName, FileDescriptors)
+		return errors.New("Dropping privileges is not supporting on this operating system. Unset `user_name` in the configuration file.")
 	}
 	if !config.OfflineMode {
 		if err := config.loadSources(proxy); err != nil {
@@ -478,7 +641,9 @@ func ConfigLoad(proxy *Proxy, flags *ConfigFlags) error {
 		}
 	}
 	if *flags.List || *flags.ListAll {
-		config.printRegisteredServers(proxy, *flags.JsonOutput)
+		if err := config.printRegisteredServers(proxy, *flags.JSONOutput); err != nil {
+			return err
+		}
 		os.Exit(0)
 	}
 	if proxy.routes != nil && len(*proxy.routes) > 0 {
@@ -508,7 +673,7 @@ func ConfigLoad(proxy *Proxy, flags *ConfigFlags) error {
 	return nil
 }
 
-func (config *Config) printRegisteredServers(proxy *Proxy, jsonOutput bool) {
+func (config *Config) printRegisteredServers(proxy *Proxy, jsonOutput bool) error {
 	var summary []ServerSummary
 	for _, registeredServer := range proxy.registeredServers {
 		addrStr, port := registeredServer.stamp.ServerAddrStr, stamps.DefaultPort
@@ -545,10 +710,11 @@ func (config *Config) printRegisteredServers(proxy *Proxy, jsonOutput bool) {
 	if jsonOutput {
 		jsonStr, err := json.MarshalIndent(summary, "", " ")
 		if err != nil {
-			dlog.Fatal(err)
+			return err
 		}
 		fmt.Print(string(jsonStr))
 	}
+	return nil
 }
 
 func (config *Config) loadSources(proxy *Proxy) error {
@@ -562,7 +728,8 @@ func (config *Config) loadSources(proxy *Proxy) error {
 	if config.SourceRequireNoFilter {
 		requiredProps |= stamps.ServerInformalPropertyNoFilter
 	}
-	for cfgSourceName, cfgSource := range config.SourcesConfig {
+	for cfgSourceName, cfgSource_ := range config.SourcesConfig {
+		cfgSource := cfgSource_
 		if err := config.loadSource(proxy, requiredProps, cfgSourceName, &cfgSource); err != nil {
 			return err
 		}
@@ -578,11 +745,11 @@ func (config *Config) loadSources(proxy *Proxy) error {
 			continue
 		}
 		if len(staticConfig.Stamp) == 0 {
-			dlog.Fatalf("Missing stamp for the static [%s] definition", serverName)
+			return fmt.Errorf("Missing stamp for the static [%s] definition", serverName)
 		}
 		stamp, err := stamps.NewServerStampFromString(staticConfig.Stamp)
 		if err != nil {
-			dlog.Fatalf("Stamp error for the static [%s] definition: [%v]", serverName, err)
+			return fmt.Errorf("Stamp error for the static [%s] definition: [%v]", serverName, err)
 		}
 		proxy.registeredServers = append(proxy.registeredServers, RegisteredServer{name: serverName, stamp: stamp})
 	}
@@ -615,8 +782,11 @@ func (config *Config) loadSource(proxy *Proxy, requiredProps stamps.ServerInform
 	}
 	source, err := NewSource(cfgSourceName, proxy.xTransport, cfgSource.URLs, cfgSource.MinisignKeyStr, cfgSource.CacheFile, cfgSource.FormatStr, time.Duration(cfgSource.RefreshDelay)*time.Hour)
 	if err != nil {
-		dlog.Criticalf("Unable to retrieve source [%s]: [%s]", cfgSourceName, err)
-		return err
+		if len(source.in) <= 0 {
+			dlog.Criticalf("Unable to retrieve source [%s]: [%s]", cfgSourceName, err)
+			return err
+		}
+		dlog.Infof("Downloading [%s] failed: %v, using cache file to startup", source.name, err)
 	}
 	proxy.sources = append(proxy.sources, source)
 	registeredServers, err := source.Parse(cfgSource.Prefix)
@@ -676,17 +846,17 @@ func includesName(names []string, name string) bool {
 	return false
 }
 
-func cdFileDir(fileName string) {
-	os.Chdir(filepath.Dir(fileName))
+func cdFileDir(fileName string) error {
+	return os.Chdir(filepath.Dir(fileName))
 }
 
 func cdLocal() {
 	exeFileName, err := os.Executable()
 	if err != nil {
 		dlog.Warnf("Unable to determine the executable directory: [%s] -- You will need to specify absolute paths in the configuration file", err)
-		return
+	} else if err := os.Chdir(filepath.Dir(exeFileName)); err != nil {
+		dlog.Warnf("Unable to change working directory to [%s]: %s", exeFileName, err)
 	}
-	os.Chdir(filepath.Dir(exeFileName))
 }
 
 func isIPAndPort(addrStr string) error {

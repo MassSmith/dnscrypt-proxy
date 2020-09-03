@@ -21,9 +21,9 @@ type CertInfo struct {
 	ForwardSecurity    bool
 }
 
-func FetchCurrentDNSCryptCert(proxy *Proxy, serverName *string, proto string, pk ed25519.PublicKey, serverAddress string, providerName string, isNew bool, relayUDPAddr *net.UDPAddr, relayTCPAddr *net.TCPAddr) (CertInfo, int, error) {
+func FetchCurrentDNSCryptCert(proxy *Proxy, serverName *string, proto string, pk ed25519.PublicKey, serverAddress string, providerName string, isNew bool, relayUDPAddr *net.UDPAddr, relayTCPAddr *net.TCPAddr, knownBugs ServerBugs) (CertInfo, int, bool, error) {
 	if len(pk) != ed25519.PublicKeySize {
-		return CertInfo{}, 0, errors.New("Invalid public key length")
+		return CertInfo{}, 0, false, errors.New("Invalid public key length")
 	}
 	if !strings.HasSuffix(providerName, ".") {
 		providerName = providerName + "."
@@ -31,16 +31,24 @@ func FetchCurrentDNSCryptCert(proxy *Proxy, serverName *string, proto string, pk
 	if serverName == nil {
 		serverName = &providerName
 	}
-	query := new(dns.Msg)
+	query := dns.Msg{}
 	query.SetQuestion(providerName, dns.TypeTXT)
 	if !strings.HasPrefix(providerName, "2.dnscrypt-cert.") {
-		dlog.Warnf("[%v] uses a non-standard provider name ('%v' doesn't start with '2.dnscrypt-cert.')", *serverName, providerName)
-		relayUDPAddr, relayTCPAddr = nil, nil
+		if relayUDPAddr != nil && !proxy.anonDirectCertFallback {
+			dlog.Warnf("[%v] uses a non-standard provider name, enable direct cert fallback to use with a relay ('%v' doesn't start with '2.dnscrypt-cert.')", *serverName, providerName)
+		} else {
+			dlog.Warnf("[%v] uses a non-standard provider name ('%v' doesn't start with '2.dnscrypt-cert.')", *serverName, providerName)
+			relayUDPAddr, relayTCPAddr = nil, nil
+		}
 	}
-	in, rtt, err := dnsExchange(proxy, proto, query, serverAddress, relayUDPAddr, relayTCPAddr, serverName)
+	tryFragmentsSupport := true
+	if knownBugs.fragmentsBlocked {
+		tryFragmentsSupport = false
+	}
+	in, rtt, fragmentsBlocked, err := dnsExchange(proxy, proto, &query, serverAddress, relayUDPAddr, relayTCPAddr, serverName, tryFragmentsSupport)
 	if err != nil {
 		dlog.Noticef("[%s] TIMEOUT", *serverName)
-		return CertInfo{}, 0, err
+		return CertInfo{}, 0, fragmentsBlocked, err
 	}
 	now := uint32(time.Now().Unix())
 	certInfo := CertInfo{CryptoConstruction: UndefinedConstruction}
@@ -49,18 +57,18 @@ func FetchCurrentDNSCryptCert(proxy *Proxy, serverName *string, proto string, pk
 	for _, answerRr := range in.Answer {
 		var txt string
 		if t, ok := answerRr.(*dns.TXT); !ok {
-			dlog.Noticef("[%v] Extra record of type [%v] found in certificate", providerName, answerRr.Header().Rrtype)
+			dlog.Noticef("[%v] Extra record of type [%v] found in certificate", *serverName, answerRr.Header().Rrtype)
 			continue
 		} else {
 			txt = strings.Join(t.Txt, "")
 		}
 		binCert := packTxtString(txt)
 		if len(binCert) < 124 {
-			dlog.Warnf("[%v] Certificate too short", providerName)
+			dlog.Warnf("[%v] Certificate too short", *serverName)
 			continue
 		}
 		if !bytes.Equal(binCert[:4], CertMagic[:4]) {
-			dlog.Warnf("[%v] Invalid cert magic", providerName)
+			dlog.Warnf("[%v] Invalid cert magic", *serverName)
 			continue
 		}
 		cryptoConstruction := CryptoConstruction(0)
@@ -70,32 +78,32 @@ func FetchCurrentDNSCryptCert(proxy *Proxy, serverName *string, proto string, pk
 		case 0x0002:
 			cryptoConstruction = XChacha20Poly1305
 		default:
-			dlog.Noticef("[%v] Unsupported crypto construction", providerName)
+			dlog.Noticef("[%v] Unsupported crypto construction", *serverName)
 			continue
 		}
 		signature := binCert[8:72]
 		signed := binCert[72:]
 		if !ed25519.Verify(pk, signed, signature) {
-			dlog.Warnf("[%v] Incorrect signature", providerName)
+			dlog.Warnf("[%v] Incorrect signature for provider name: [%v]", *serverName, providerName)
 			continue
 		}
 		serial := binary.BigEndian.Uint32(binCert[112:116])
 		tsBegin := binary.BigEndian.Uint32(binCert[116:120])
 		tsEnd := binary.BigEndian.Uint32(binCert[120:124])
 		if tsBegin >= tsEnd {
-			dlog.Warnf("[%v] certificate ends before it starts (%v >= %v)", providerName, tsBegin, tsEnd)
+			dlog.Warnf("[%v] certificate ends before it starts (%v >= %v)", *serverName, tsBegin, tsEnd)
 			continue
 		}
 		ttl := tsEnd - tsBegin
 		if ttl > 86400*7 {
-			dlog.Infof("[%v] the key validity period for this server is excessively long (%d days), significantly reducing reliability and forward security.", providerName, ttl/86400)
+			dlog.Infof("[%v] the key validity period for this server is excessively long (%d days), significantly reducing reliability and forward security.", *serverName, ttl/86400)
 			daysLeft := (tsEnd - now) / 86400
 			if daysLeft < 1 {
-				dlog.Criticalf("[%v] certificate will expire today -- Switch to a different resolver as soon as possible", providerName)
+				dlog.Criticalf("[%v] certificate will expire today -- Switch to a different resolver as soon as possible", *serverName)
 			} else if daysLeft <= 7 {
-				dlog.Warnf("[%v] certificate is about to expire -- if you don't manage this server, tell the server operator about it", providerName)
+				dlog.Warnf("[%v] certificate is about to expire -- if you don't manage this server, tell the server operator about it", *serverName)
 			} else if daysLeft <= 30 {
-				dlog.Infof("[%v] certificate will expire in %d days", providerName, daysLeft)
+				dlog.Infof("[%v] certificate will expire in %d days", *serverName, daysLeft)
 			}
 			certInfo.ForwardSecurity = false
 		} else {
@@ -103,24 +111,24 @@ func FetchCurrentDNSCryptCert(proxy *Proxy, serverName *string, proto string, pk
 		}
 		if !proxy.certIgnoreTimestamp {
 			if now > tsEnd || now < tsBegin {
-				dlog.Debugf("[%v] Certificate not valid at the current date (now: %v is not in [%v..%v])", providerName, now, tsBegin, tsEnd)
+				dlog.Debugf("[%v] Certificate not valid at the current date (now: %v is not in [%v..%v])", *serverName, now, tsBegin, tsEnd)
 				continue
 			}
 		}
 		if serial < highestSerial {
-			dlog.Debugf("[%v] Superseded by a previous certificate", providerName)
+			dlog.Debugf("[%v] Superseded by a previous certificate", *serverName)
 			continue
 		}
 		if serial == highestSerial {
 			if cryptoConstruction < certInfo.CryptoConstruction {
-				dlog.Debugf("[%v] Keeping the previous, preferred crypto construction", providerName)
+				dlog.Debugf("[%v] Keeping the previous, preferred crypto construction", *serverName)
 				continue
 			} else {
-				dlog.Debugf("[%v] Upgrading the construction from %v to %v", providerName, certInfo.CryptoConstruction, cryptoConstruction)
+				dlog.Debugf("[%v] Upgrading the construction from %v to %v", *serverName, certInfo.CryptoConstruction, cryptoConstruction)
 			}
 		}
 		if cryptoConstruction != XChacha20Poly1305 && cryptoConstruction != XSalsa20Poly1305 {
-			dlog.Noticef("[%v] Cryptographic construction %v not supported", providerName, cryptoConstruction)
+			dlog.Noticef("[%v] Cryptographic construction %v not supported", *serverName, cryptoConstruction)
 			continue
 		}
 		var serverPk [32]byte
@@ -139,9 +147,9 @@ func FetchCurrentDNSCryptCert(proxy *Proxy, serverName *string, proto string, pk
 		certCountStr = " - additional certificate"
 	}
 	if certInfo.CryptoConstruction == UndefinedConstruction {
-		return certInfo, 0, errors.New("No useable certificate found")
+		return certInfo, 0, fragmentsBlocked, errors.New("No useable certificate found")
 	}
-	return certInfo, int(rtt.Nanoseconds() / 1000000), nil
+	return certInfo, int(rtt.Nanoseconds() / 1000000), fragmentsBlocked, nil
 }
 
 func isDigit(b byte) bool { return b >= '0' && b <= '9' }
@@ -179,25 +187,98 @@ func packTxtString(s string) []byte {
 	return msg
 }
 
-func dnsExchange(proxy *Proxy, proto string, query *dns.Msg, serverAddress string, relayUDPAddr *net.UDPAddr, relayTCPAddr *net.TCPAddr, serverName *string) (*dns.Msg, time.Duration, error) {
-	response, ttl, err := _dnsExchange(proxy, proto, query, serverAddress, relayUDPAddr, relayTCPAddr)
-	if err != nil && relayUDPAddr != nil {
-		dlog.Debugf("Unable to get a certificate for [%v] via relay [%v], retrying over a direct connection", *serverName, relayUDPAddr.IP)
-		response, ttl, err = _dnsExchange(proxy, proto, query, serverAddress, nil, nil)
-		if err == nil {
-			dlog.Infof("Direct certificate retrieval for [%v] succeeded", *serverName)
-		}
-	}
-	return response, ttl, err
+type dnsExchangeResponse struct {
+	response         *dns.Msg
+	rtt              time.Duration
+	priority         int
+	fragmentsBlocked bool
+	err              error
 }
 
-func _dnsExchange(proxy *Proxy, proto string, query *dns.Msg, serverAddress string, relayUDPAddr *net.UDPAddr, relayTCPAddr *net.TCPAddr) (*dns.Msg, time.Duration, error) {
+func dnsExchange(proxy *Proxy, proto string, query *dns.Msg, serverAddress string, relayUDPAddr *net.UDPAddr, relayTCPAddr *net.TCPAddr, serverName *string, tryFragmentsSupport bool) (*dns.Msg, time.Duration, bool, error) {
+	for {
+		cancelChannel := make(chan struct{})
+		channel := make(chan dnsExchangeResponse)
+		var err error
+		options := 0
+
+		for tries := 0; tries < 3; tries++ {
+			if tryFragmentsSupport {
+				queryCopy := query.Copy()
+				queryCopy.Id += uint16(options)
+				go func(query *dns.Msg, delay time.Duration) {
+					option := _dnsExchange(proxy, proto, query, serverAddress, relayUDPAddr, relayTCPAddr, 1500)
+					option.fragmentsBlocked = false
+					option.priority = 0
+					channel <- option
+					time.Sleep(delay)
+					select {
+					case <-cancelChannel:
+						return
+					default:
+					}
+				}(queryCopy, time.Duration(200*tries)*time.Millisecond)
+				options++
+			}
+			queryCopy := query.Copy()
+			queryCopy.Id += uint16(options)
+			go func(query *dns.Msg, delay time.Duration) {
+				option := _dnsExchange(proxy, proto, query, serverAddress, relayUDPAddr, relayTCPAddr, 480)
+				option.fragmentsBlocked = true
+				option.priority = 1
+				channel <- option
+				time.Sleep(delay)
+				select {
+				case <-cancelChannel:
+					return
+				default:
+				}
+			}(queryCopy, time.Duration(250*tries)*time.Millisecond)
+			options++
+		}
+		var bestOption *dnsExchangeResponse
+		for i := 0; i < options; i++ {
+			if dnsExchangeResponse := <-channel; dnsExchangeResponse.err == nil {
+				if bestOption == nil || dnsExchangeResponse.priority < bestOption.priority ||
+					(dnsExchangeResponse.priority == bestOption.priority && dnsExchangeResponse.rtt < bestOption.rtt) {
+					bestOption = &dnsExchangeResponse
+					if bestOption.priority == 0 {
+						close(cancelChannel)
+						break
+					}
+				}
+			} else {
+				err = dnsExchangeResponse.err
+			}
+		}
+		if bestOption != nil {
+			if bestOption.fragmentsBlocked {
+				dlog.Debugf("Certificate retrieval for [%v] succeeded but server is blocking fragments", *serverName)
+			} else {
+				dlog.Debugf("Certificate retrieval for [%v] succeeded", *serverName)
+			}
+			return bestOption.response, bestOption.rtt, bestOption.fragmentsBlocked, nil
+		}
+
+		if relayUDPAddr == nil || !proxy.anonDirectCertFallback {
+			if err == nil {
+				err = errors.New("Unable to reach the server")
+			}
+			return nil, 0, false, err
+		}
+		dlog.Infof("Unable to get a certificate for [%v] via relay [%v], retrying over a direct connection", *serverName, relayUDPAddr.IP)
+		relayUDPAddr, relayTCPAddr = nil, nil
+	}
+}
+
+func _dnsExchange(proxy *Proxy, proto string, query *dns.Msg, serverAddress string, relayUDPAddr *net.UDPAddr, relayTCPAddr *net.TCPAddr, paddedLen int) dnsExchangeResponse {
 	var packet []byte
 	var rtt time.Duration
+
 	if proto == "udp" {
 		qNameLen, padding := len(query.Question[0].Name), 0
-		if qNameLen < 480 {
-			padding = 480 - qNameLen
+		if qNameLen < paddedLen {
+			padding = paddedLen - qNameLen
 		}
 		if padding > 0 {
 			opt := new(dns.OPT)
@@ -209,11 +290,11 @@ func _dnsExchange(proxy *Proxy, proto string, query *dns.Msg, serverAddress stri
 		}
 		binQuery, err := query.Pack()
 		if err != nil {
-			return nil, 0, err
+			return dnsExchangeResponse{err: err}
 		}
 		udpAddr, err := net.ResolveUDPAddr("udp", serverAddress)
 		if err != nil {
-			return nil, 0, err
+			return dnsExchangeResponse{err: err}
 		}
 		upstreamAddr := udpAddr
 		if relayUDPAddr != nil {
@@ -223,26 +304,30 @@ func _dnsExchange(proxy *Proxy, proto string, query *dns.Msg, serverAddress stri
 		now := time.Now()
 		pc, err := net.DialUDP("udp", nil, upstreamAddr)
 		if err != nil {
-			return nil, 0, err
+			return dnsExchangeResponse{err: err}
 		}
 		defer pc.Close()
-		pc.SetDeadline(time.Now().Add(proxy.timeout))
-		pc.Write(binQuery)
+		if err := pc.SetDeadline(time.Now().Add(proxy.timeout)); err != nil {
+			return dnsExchangeResponse{err: err}
+		}
+		if _, err := pc.Write(binQuery); err != nil {
+			return dnsExchangeResponse{err: err}
+		}
 		packet = make([]byte, MaxDNSPacketSize)
 		length, err := pc.Read(packet)
 		if err != nil {
-			return nil, 0, err
+			return dnsExchangeResponse{err: err}
 		}
 		rtt = time.Since(now)
 		packet = packet[:length]
 	} else {
 		binQuery, err := query.Pack()
 		if err != nil {
-			return nil, 0, err
+			return dnsExchangeResponse{err: err}
 		}
 		tcpAddr, err := net.ResolveTCPAddr("tcp", serverAddress)
 		if err != nil {
-			return nil, 0, err
+			return dnsExchangeResponse{err: err}
 		}
 		upstreamAddr := tcpAddr
 		if relayTCPAddr != nil {
@@ -258,24 +343,28 @@ func _dnsExchange(proxy *Proxy, proto string, query *dns.Msg, serverAddress stri
 			pc, err = (*proxyDialer).Dial("tcp", tcpAddr.String())
 		}
 		if err != nil {
-			return nil, 0, err
+			return dnsExchangeResponse{err: err}
 		}
 		defer pc.Close()
-		pc.SetDeadline(time.Now().Add(proxy.timeout))
+		if err := pc.SetDeadline(time.Now().Add(proxy.timeout)); err != nil {
+			return dnsExchangeResponse{err: err}
+		}
 		binQuery, err = PrefixWithSize(binQuery)
 		if err != nil {
-			return nil, 0, err
+			return dnsExchangeResponse{err: err}
 		}
-		pc.Write(binQuery)
+		if _, err := pc.Write(binQuery); err != nil {
+			return dnsExchangeResponse{err: err}
+		}
 		packet, err = ReadPrefixed(&pc)
 		if err != nil {
-			return nil, 0, err
+			return dnsExchangeResponse{err: err}
 		}
 		rtt = time.Since(now)
 	}
 	msg := dns.Msg{}
 	if err := msg.Unpack(packet); err != nil {
-		return nil, 0, err
+		return dnsExchangeResponse{err: err}
 	}
-	return &msg, rtt, nil
+	return dnsExchangeResponse{response: &msg, rtt: rtt, err: nil}
 }

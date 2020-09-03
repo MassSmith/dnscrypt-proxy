@@ -40,7 +40,11 @@ var (
 
 var (
 	FileDescriptors   = make([]*os.File, 0)
-	FileDescriptorNum = 0
+	FileDescriptorNum = uintptr(0)
+)
+
+const (
+	InheritedDescriptorsBase = uintptr(50)
 )
 
 func PrefixWithSize(packet []byte) ([]byte, error) {
@@ -141,6 +145,18 @@ func StringStripSpaces(str string) string {
 		}
 		return r
 	}, str)
+}
+
+func TrimAndStripInlineComments(str string) string {
+	if idx := strings.LastIndexByte(str, '#'); idx >= 0 {
+		if idx == 0 || str[0] == '#' {
+			return ""
+		}
+		if prev := str[idx-1]; prev == ' ' || prev == '\t' {
+			str = str[:idx-1]
+		}
+	}
+	return strings.TrimFunc(str, unicode.IsSpace)
 }
 
 func ExtractHostAndPort(str string, defaultPort int) (host string, port int) {

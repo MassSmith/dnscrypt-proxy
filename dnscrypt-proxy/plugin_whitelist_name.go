@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"time"
@@ -10,13 +11,12 @@ import (
 
 	"github.com/jedisct1/dlog"
 	"github.com/miekg/dns"
-	lumberjack "gopkg.in/natefinch/lumberjack.v2"
 )
 
 type PluginWhitelistName struct {
 	allWeeklyRanges *map[string]WeeklyRanges
 	patternMatcher  *PatternMatcher
-	logger          *lumberjack.Logger
+	logger          io.Writer
 	format          string
 }
 
@@ -35,10 +35,10 @@ func (plugin *PluginWhitelistName) Init(proxy *Proxy) error {
 		return err
 	}
 	plugin.allWeeklyRanges = proxy.allWeeklyRanges
-	plugin.patternMatcher = NewPatternPatcher()
+	plugin.patternMatcher = NewPatternMatcher()
 	for lineNo, line := range strings.Split(string(bin), "\n") {
-		line = strings.TrimFunc(line, unicode.IsSpace)
-		if len(line) == 0 || strings.HasPrefix(line, "#") {
+		line = TrimAndStripInlineComments(line)
+		if len(line) == 0 {
 			continue
 		}
 		parts := strings.Split(line, "@")
@@ -67,7 +67,7 @@ func (plugin *PluginWhitelistName) Init(proxy *Proxy) error {
 	if len(proxy.whitelistNameLogFile) == 0 {
 		return nil
 	}
-	plugin.logger = &lumberjack.Logger{LocalTime: true, MaxSize: proxy.logMaxSize, MaxAge: proxy.logMaxAge, MaxBackups: proxy.logMaxBackups, Filename: proxy.whitelistNameLogFile, Compress: true}
+	plugin.logger = Logger(proxy.logMaxSize, proxy.logMaxAge, proxy.logMaxBackups, proxy.whitelistNameLogFile)
 	plugin.format = proxy.whitelistNameFormat
 
 	return nil
@@ -82,11 +82,7 @@ func (plugin *PluginWhitelistName) Reload() error {
 }
 
 func (plugin *PluginWhitelistName) Eval(pluginsState *PluginsState, msg *dns.Msg) error {
-	questions := msg.Question
-	if len(questions) != 1 {
-		return nil
-	}
-	qName := strings.ToLower(StripTrailingDot(questions[0].Name))
+	qName := pluginsState.qName
 	whitelist, reason, xweeklyRanges := plugin.patternMatcher.Eval(qName)
 	var weeklyRanges *WeeklyRanges
 	if xweeklyRanges != nil {
@@ -98,9 +94,6 @@ func (plugin *PluginWhitelistName) Eval(pluginsState *PluginsState, msg *dns.Msg
 		}
 	}
 	if whitelist {
-		if pluginsState.sessionData == nil {
-			pluginsState.sessionData = make(map[string]interface{})
-		}
 		pluginsState.sessionData["whitelisted"] = true
 		if plugin.logger != nil {
 			var clientIPStr string
@@ -124,7 +117,7 @@ func (plugin *PluginWhitelistName) Eval(pluginsState *PluginsState, msg *dns.Msg
 			if plugin.logger == nil {
 				return errors.New("Log file not initialized")
 			}
-			plugin.logger.Write([]byte(line))
+			_, _ = plugin.logger.Write([]byte(line))
 		}
 	}
 	return nil

@@ -1,3 +1,160 @@
+* Version 2.0.44
+ - More updates to the set of block lists, thanks again to IceCodeNew.
+ - Netprobes and listening sockets are now ignored when the `-list`,
+`-list-all`, `-show-certs` or `-check` command-line switches are used.
+ - `tls_client_auth` was renamed to `doh_client_x509_auth`. A section
+with the previous name is temporarily ignored if empty, but will error
+out if not.
+ - Unit tests are now working on 32-bit systems. Thanks to Will Elwood
+and @lifenjoiner.
+
+* Version 2.0.43
+ - Built-in support for DNS64 translation has been implemented.
+(Contributed by Sergey Smirnov, thanks!)
+ - Connections to DoH servers can be authenticated using TLS client
+certificates (Contributed by Kevin O'Sullivan, thanks!)
+ - Multiple stamps are now allowed for a single server in resolvers
+and relays lists.
+ - Android: the time zone for log files is now set to the system
+time zone.
+ - Quite a lot of updates and additions have been made to the
+example domain block lists. Thanks to `IceCodeNew`!
+ - Cached configuration files can now be temporarily used if
+they are out of date, but bootstraping is impossible. Contributed by
+`lifenjoiner`, thanks!
+ - Precompiled macOS binaries are now notarized.
+ - `generate-domains-blacklists` now tries to deduplicate entries
+clobbered by wildcard rules. Thanks to `Huhni`!
+ - `generate-domains-blacklists` can now directly write lists to a
+file with the `-o` command-line option.
+ - cache files are now downloaded as the user the daemon will be running
+as. This fixes permission issues at startup time.
+ - Forwarded queries are now subject to global timeouts, and can be
+forced to use TCP.
+ - The `ct` parameter has been removed from DoH queries, as Google doesn't
+require it any more.
+ - Service installation is now supported on FreeBSD.
+ - When stored into a file, service logs now only contain data from the most
+recent launch. This can be changed with the new `log_file_latest` option.
+ - Breaking change: the `tls_client_auth` section was renamed to
+`doh_client_x509_auth`. If you had a tls_client_auth section in the
+configuration file, it needs to be updated.
+
+* Version 2.0.42
+ - The current versions of the `dnsdist` load balancer (presumably used
+by quad9, cleanbrowsing, qualityology, freetsa.org, ffmuc.net,
+opennic-bongobow, sth-dnscrypt-se, ams-dnscrypt-nl and more)
+is preventing queries over 1500 bytes from being received over UDP.
+Temporary workarounds have been introduced to improve reliability
+with these resolvers for regular DNSCrypt. Unfortunately, anonymized
+DNS cannot be reliable until the issue is fixed server-side. `dnsdist`
+authors are aware of it and are working on a fix.
+ - New option in the `[anonymized_dns]` section: `skip_incompatible`,
+to ignore resolvers incompatible with Anonymized DNS instead of
+using them without a relay.
+ - The server latency benchmark is faster while being able to perform
+more retries if necessary.
+ - Continuous integration has been moved to GitHub Actions.
+
+* Version 2.0.41
+ - Precompiled ARM binaries are compatible with ARMv5 CPUs. The
+default arm builds were not compatible with older CPUs when compiled
+with Go 1.14. mips64 binaries are explicitly compiled with `softfloat`
+to improve compatibility.
+ - Quad9 seems to be only blocking fragmented queries over UDP for
+some networks. They have been removed from the default list of broken
+resolvers; runtime detection of support for fragments should now do
+the job.
+ - Runtime detection of support for fragments was actually enabled.
+
+* Version 2.0.40
+ - Servers blocking fragmented queries are now automatically detected.
+ - The server name is now only present in query logs when an actual
+upstream servers was required to resolve a query.
+ - TLS client authentication has been added for DoH.
+ - The Firefox plugin is now skipped for connections coming from the
+local DoH server.
+ - DoH RTT computation is now more accurate, especially when CDNs are
+in the middle.
+ - The forwarding plugin is now more reliable, and handles retries over
+ TCP.
+
+* Version 2.0.39
+ - The Firefox Local DoH service didn't properly work in version 2.0.38;
+this has been fixed. Thanks to Simon Brand for the report!
+
+* Version 2.0.38
+ - Entries from lists (forwarding, blacklists, whitelists) now support
+inline comments.
+ - Reliability improvement: queries over UDP are retried after a timeout
+instead of solely relying on the client.
+ - Reliability improvement: during temporary network outages, cached records
+are now served even if they are stale.
+ - Bug fix: SOCKS proxies and DNS relays can be combined.
+ - New feature: multiple fallback resolvers are now supported (see the
+new `fallback_resolvers` option. Note that `fallback_resolver` is
+still supported for backward compatibility).
+ - Windows: the service can be installed with a configuration file
+stored separately from the application.
+ - Security (affecting DoH): precompiled binaries of dnscrypt-proxy 2.0.37 are
+built using Go 1.13.7 that fixes a TLS certificate parsing issue present in
+previous versions of the compiler.
+
+* Version 2.0.36
+ - New option: `block_undelegated`. When enabled, `dnscrypt-proxy` will
+directly respond to queries for locally-served zones (https://sk.tl/2QqB971U)
+and nonexistent zones that should have been kept local, but are frequently
+leaked. This reduces latency and improves privacy.
+ - Conformance: the `DO` bit is now set in synthetic responses if it was
+set in a question, and the `AD` bit is cleared.
+ - The `miegkg/dns` module was updated to version 1.1.26, that fixes a
+security issue affecting non-encrypted/non-authenticated DNS traffic. In
+`dnscrypt-proxy`, this only affects the forwarding feature.
+
+* Version 2.0.35
+ - New option: `block_unqualified` to block `A`/`AAAA` queries with
+unqualified host names. These will very rarely get an answer from upstream
+resolvers, but can leak private information to these, as well as to root
+servers.
+ - When a `CNAME` pointer is blocked, the original query name is now logged
+along with the pointer. This makes it easier to know what the original
+query name, so it can be whitelisted, or what the pointer was, so it
+can be removed from the blacklist.
+
+* Version 2.0.34
+ - Blacklisted names are now also blocked if they appear in `CNAME`
+pointers.
+ - `dnscrypt-proxy` can now act as a local DoH *server*. Firefox can
+be configured to use it, so that ESNI can be enabled without bypassing
+your DNS proxy.
+
+* Version 2.0.33
+ - Fixes an issue that caused some valid queries to return `PARSE_ERROR`.
+
+* Version 2.0.32
+ - On certificate errors, the server name is now logged instead of the
+provider name, which is generally more useful.
+ - IP addresses for DoH servers that require DNS lookups are now cached
+for at least 12 hours.
+ - `ignore_system_dns` is now set to `true` by default.
+ - A workaround for a bug in Cisco servers has been implemented.
+ - A corrupted or incomplete resolvers list is now ignored, keeping the
+last good known cached list until the next update. In addition, logging was
+improved and unit tests were also added. Awesome contribution from William
+Elwood, thanks!
+ - On Windows, the network probe immediately returned instead of blocking
+if `netprobe_timeout` was set to `-1`. This has been fixed.
+ - Expired cached IP addresses now have a grace period, to avoid breaking the
+service if they temporarily can't be refreshed.
+ - On Windows, the service now returns immediately, solving a long-standing
+issue when initialization took more than 30 seconds ("The service did not
+respond to the start or control request in a timely fashion"). Fantastic
+work by Alison Winters, thanks!
+ - The `SERVER_ERROR` error code has been split into two new error codes:
+`NETWORK_ERROR` (self-explanatory) and `SERVFAIL` (a response was returned,
+but it includes a `SERVFAIL` error code).
+ - Responses are now always compressed.
+
 * Version 2.0.31
  - This version fixes two regressions introduced in version 2.0.29:
 DoH server couldn't be reached over IPv6 any more, and the proxy

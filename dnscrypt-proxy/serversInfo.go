@@ -1,12 +1,11 @@
 package main
 
 import (
+	crypto_rand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
-	"io/ioutil"
 	"math/rand"
 	"net"
 	"net/url"
@@ -18,6 +17,7 @@ import (
 	"github.com/VividCortex/ewma"
 	"github.com/jedisct1/dlog"
 	stamps "github.com/jedisct1/go-dnsstamps"
+	"github.com/miekg/dns"
 	"golang.org/x/crypto/ed25519"
 )
 
@@ -29,6 +29,16 @@ type RegisteredServer struct {
 	name        string
 	stamp       stamps.ServerStamp
 	description string
+}
+
+type ServerBugs struct {
+	fragmentsBlocked bool
+}
+
+type DOHClientCreds struct {
+	clientCert string
+	clientKey  string
+	rootCA     string
 }
 
 type ServerInfo struct {
@@ -45,23 +55,49 @@ type ServerInfo struct {
 	TCPAddr            *net.TCPAddr
 	RelayUDPAddr       *net.UDPAddr
 	RelayTCPAddr       *net.TCPAddr
+	knownBugs          ServerBugs
 	lastActionTS       time.Time
 	rtt                ewma.MovingAverage
 	initialRtt         int
 	useGet             bool
+	DOHClientCreds     DOHClientCreds
 }
 
-type LBStrategy int
+type LBStrategy interface {
+	getCandidate(serversCount int) int
+}
 
-const (
-	LBStrategyNone = LBStrategy(iota)
-	LBStrategyP2
-	LBStrategyPH
-	LBStrategyFirst
-	LBStrategyRandom
-)
+type LBStrategyP2 struct{}
 
-const DefaultLBStrategy = LBStrategyP2
+func (LBStrategyP2) getCandidate(serversCount int) int {
+	return rand.Intn(Min(serversCount, 2))
+}
+
+type LBStrategyPN struct{ n int }
+
+func (s LBStrategyPN) getCandidate(serversCount int) int {
+	return rand.Intn(Min(serversCount, s.n))
+}
+
+type LBStrategyPH struct{}
+
+func (LBStrategyPH) getCandidate(serversCount int) int {
+	return rand.Intn(Max(Min(serversCount, 2), serversCount/2))
+}
+
+type LBStrategyFirst struct{}
+
+func (LBStrategyFirst) getCandidate(int) int {
+	return 0
+}
+
+type LBStrategyRandom struct{}
+
+func (LBStrategyRandom) getCandidate(serversCount int) int {
+	return rand.Intn(serversCount)
+}
+
+var DefaultLBStrategy = LBStrategyP2{}
 
 type ServersInfo struct {
 	sync.RWMutex
@@ -198,17 +234,7 @@ func (serversInfo *ServersInfo) getOne() *ServerInfo {
 	if serversInfo.lbEstimator {
 		serversInfo.estimatorUpdate()
 	}
-	var candidate int
-	switch serversInfo.lbStrategy {
-	case LBStrategyFirst:
-		candidate = 0
-	case LBStrategyPH:
-		candidate = rand.Intn(Max(Min(serversCount, 2), serversCount/2))
-	case LBStrategyRandom:
-		candidate = rand.Intn(serversCount)
-	default:
-		candidate = rand.Intn(Min(serversCount, 2))
-	}
+	candidate := serversInfo.lbStrategy.getCandidate(serversCount)
 	serverInfo := serversInfo.inner[candidate]
 	dlog.Debugf("Using candidate [%s] RTT: %d", (*serverInfo).Name, int((*serverInfo).rtt.Value()))
 	serversInfo.Unlock()
@@ -293,11 +319,31 @@ func fetchDNSCryptServerInfo(proxy *Proxy, name string, stamp stamps.ServerStamp
 		dlog.Warnf("Public key [%s] shouldn't be hex-encoded any more", string(stamp.ServerPk))
 		stamp.ServerPk = serverPk
 	}
+	knownBugs := ServerBugs{}
+	for _, buggyServerName := range proxy.serversBlockingFragments {
+		if buggyServerName == name {
+			knownBugs.fragmentsBlocked = true
+			dlog.Infof("Known bug in [%v]: fragmented questions over UDP are blocked", name)
+			break
+		}
+	}
 	relayUDPAddr, relayTCPAddr, err := route(proxy, name)
 	if err != nil {
 		return ServerInfo{}, err
 	}
-	certInfo, rtt, err := FetchCurrentDNSCryptCert(proxy, &name, proxy.mainProto, stamp.ServerPk, stamp.ServerAddrStr, stamp.ProviderName, isNew, relayUDPAddr, relayTCPAddr)
+	certInfo, rtt, fragmentsBlocked, err := FetchCurrentDNSCryptCert(proxy, &name, proxy.mainProto, stamp.ServerPk, stamp.ServerAddrStr, stamp.ProviderName, isNew, relayUDPAddr, relayTCPAddr, knownBugs)
+	if !knownBugs.fragmentsBlocked && fragmentsBlocked {
+		dlog.Debugf("[%v] drops fragmented queries", name)
+		knownBugs.fragmentsBlocked = true
+	}
+	if knownBugs.fragmentsBlocked && (relayUDPAddr != nil || relayTCPAddr != nil) {
+		relayTCPAddr, relayUDPAddr = nil, nil
+		if proxy.skipAnonIncompatbibleResolvers {
+			dlog.Infof("[%v] is incompatible with anonymization, it will be ignored", name)
+			return ServerInfo{}, errors.New("Resolver is incompatible with anonymization")
+		}
+		dlog.Warnf("[%v] is incompatible with anonymization", name)
+	}
 	if err != nil {
 		return ServerInfo{}, err
 	}
@@ -322,7 +368,49 @@ func fetchDNSCryptServerInfo(proxy *Proxy, name string, stamp stamps.ServerStamp
 		RelayUDPAddr:       relayUDPAddr,
 		RelayTCPAddr:       relayTCPAddr,
 		initialRtt:         rtt,
+		knownBugs:          knownBugs,
 	}, nil
+}
+
+func dohTestPacket(msgID uint16) []byte {
+	msg := dns.Msg{}
+	msg.SetQuestion(".", dns.TypeNS)
+	msg.Id = msgID
+	msg.MsgHdr.RecursionDesired = true
+	msg.SetEdns0(uint16(MaxDNSPacketSize), false)
+	ext := new(dns.EDNS0_PADDING)
+	ext.Padding = make([]byte, 16)
+	crypto_rand.Read(ext.Padding)
+	edns0 := msg.IsEdns0()
+	edns0.Option = append(edns0.Option, ext)
+	body, err := msg.Pack()
+	if err != nil {
+		dlog.Fatal(err)
+	}
+	return body
+}
+
+func dohNXTestPacket(msgID uint16) []byte {
+	msg := dns.Msg{}
+	qName := make([]byte, 16)
+	charset := "abcdefghijklmnopqrstuvwxyz"
+	for i := range qName {
+		qName[i] = charset[rand.Intn(len(charset))]
+	}
+	msg.SetQuestion(string(qName)+".test.dnscrypt.", dns.TypeNS)
+	msg.Id = msgID
+	msg.MsgHdr.RecursionDesired = true
+	msg.SetEdns0(uint16(MaxDNSPacketSize), false)
+	ext := new(dns.EDNS0_PADDING)
+	ext.Padding = make([]byte, 16)
+	crypto_rand.Read(ext.Padding)
+	edns0 := msg.IsEdns0()
+	edns0.Option = append(edns0.Option, ext)
+	body, err := msg.Pack()
+	if err != nil {
+		dlog.Fatal(err)
+	}
+	return body
 }
 
 func fetchDoHServerInfo(proxy *Proxy, name string, stamp stamps.ServerStamp, isNew bool) (ServerInfo, error) {
@@ -341,24 +429,40 @@ func fetchDoHServerInfo(proxy *Proxy, name string, stamp stamps.ServerStamp, isN
 		Host:   stamp.ProviderName,
 		Path:   stamp.Path,
 	}
-	body := []byte{
-		0xca, 0xfe, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00, 0x00, 0x29, 0x10, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00,
+	body := dohTestPacket(0xcafe)
+	dohClientCreds, ok := (*proxy.dohCreds)[name]
+	if !ok {
+		dohClientCreds, ok = (*proxy.dohCreds)["*"]
+	}
+	if ok {
+		dlog.Noticef("Enabling TLS authentication for [%s]", name)
+		proxy.xTransport.tlsClientCreds = dohClientCreds
+		proxy.xTransport.rebuildTransport()
 	}
 	useGet := false
-	if _, _, err := proxy.xTransport.DoHQuery(useGet, url, body, proxy.timeout); err != nil {
+	if _, _, _, err := proxy.xTransport.DoHQuery(useGet, url, body, proxy.timeout); err != nil {
 		useGet = true
-		if _, _, err := proxy.xTransport.DoHQuery(useGet, url, body, proxy.timeout); err != nil {
+		if _, _, _, err := proxy.xTransport.DoHQuery(useGet, url, body, proxy.timeout); err != nil {
 			return ServerInfo{}, err
 		}
 		dlog.Debugf("Server [%s] doesn't appear to support POST; falling back to GET requests", name)
 	}
-	resp, rtt, err := proxy.xTransport.DoHQuery(useGet, url, body, proxy.timeout)
+	body = dohNXTestPacket(0xcafe)
+	serverResponse, tls, rtt, err := proxy.xTransport.DoHQuery(useGet, url, body, proxy.timeout)
 	if err != nil {
+		dlog.Infof("[%s] [%s]: %v", name, url, err)
 		return ServerInfo{}, err
 	}
-	tls := resp.TLS
 	if tls == nil || !tls.HandshakeComplete {
 		return ServerInfo{}, errors.New("TLS handshake failed")
+	}
+	msg := dns.Msg{}
+	if err := msg.Unpack(serverResponse); err != nil {
+		dlog.Warnf("[%s]: %v", name, err)
+		return ServerInfo{}, err
+	}
+	if msg.Rcode != dns.RcodeNameError {
+		dlog.Criticalf("[%s] may be a lying resolver", name)
 	}
 	protocol := tls.NegotiatedProtocol
 	if len(protocol) == 0 {
@@ -390,14 +494,13 @@ func fetchDoHServerInfo(proxy *Proxy, name string, stamp stamps.ServerStamp, isN
 		}
 	}
 	if !found && len(stamp.Hashes) > 0 {
-		return ServerInfo{}, fmt.Errorf("Certificate hash [%x] not found for [%s]", wantedHash, name)
+		dlog.Criticalf("[%s] Certificate hash [%x] not found", name, wantedHash)
+		return ServerInfo{}, fmt.Errorf("Certificate hash not found")
 	}
-	respBody, err := ioutil.ReadAll(io.LimitReader(resp.Body, MaxHTTPBodyLength))
-	if err != nil {
-		return ServerInfo{}, err
-	}
+	respBody := serverResponse
 	if len(respBody) < MinDNSPacketSize || len(respBody) > MaxDNSPacketSize ||
 		respBody[0] != 0xca || respBody[1] != 0xfe || respBody[4] != 0x00 || respBody[5] != 0x01 {
+		dlog.Info("Webserver returned an unexpected response")
 		return ServerInfo{}, errors.New("Webserver returned an unexpected response")
 	}
 	xrtt := int(rtt.Nanoseconds() / 1000000)
